@@ -1,0 +1,39 @@
+# Credit Card Fraud Detection — Run Results
+
+Dataset: uploaded Kaggle Credit Card Fraud Detection dataset (`creditcard.csv`)
+
+## Data
+- Total rows: 284,807
+- Fraud cases: 492
+- Train rows: 227,845
+- Test rows: 56,962
+- SMOTE-resampled training rows: 454,902
+- Split: stratified 80/20, random_state=42
+
+## Model
+- StandardScaler applied to `Time` and `Amount`
+- SMOTE applied to training data only
+- XGBClassifier: n_estimators=300, max_depth=5, learning_rate=0.05, subsample=0.8, colsample_bytree=0.8, eval_metric=aucpr, random_state=42
+
+## Test metrics
+- ROC-AUC: **0.980936**
+- PR-AUC / Average Precision: **0.848562**
+
+### Threshold = 0.50
+- Precision: 0.370690
+- Recall: 0.877551
+- F1: 0.521212
+- Confusion matrix: `[[56718, 146], [12, 86]]`
+
+### Selected threshold = 0.65
+Selection rule: first tested threshold with recall >= 0.80 and precision >= 0.50.
+
+- Precision: **0.506024**
+- Recall: **0.857143**
+- F1: **0.636364**
+- Confusion matrix: `[[56782, 82], [14, 84]]`
+
+## Interpretation
+The threshold changes the false-positive/false-negative tradeoff. These results are an offline benchmark on the supplied dataset and are not a guarantee of production fraud-detection performance. The dataset is highly imbalanced, so PR-AUC and threshold-specific metrics should be considered alongside ROC-AUC.
+
+Plots were generated during execution: confusion matrix, ROC curve, and precision-recall curve. Large/binary artifacts are not committed through the current GitHub text-file connector.
