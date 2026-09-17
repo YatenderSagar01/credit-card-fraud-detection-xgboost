@@ -1,10 +1,10 @@
 """Credit-card fraud detection using XGBoost, SMOTE and threshold tuning."""
 
 from pathlib import Path
+import json
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
+import joblib
 
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
@@ -13,38 +13,63 @@ from sklearn.metrics import (
     confusion_matrix,
     roc_auc_score,
     average_precision_score,
+    precision_score,
+    recall_score,
+    f1_score,
 )
 from xgboost import XGBClassifier
 from imblearn.over_sampling import SMOTE
 
 
-DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "creditcard.csv"
+BASE_DIR = Path(__file__).resolve().parents[1]
+DATA_PATH = BASE_DIR / "data" / "creditcard.csv"
+RESULTS_DIR = BASE_DIR / "results"
+MODELS_DIR = BASE_DIR / "models"
+RESULTS_DIR.mkdir(exist_ok=True)
+MODELS_DIR.mkdir(exist_ok=True)
+
+
+def evaluate_at_threshold(y_true, probabilities, threshold):
+    predictions = (probabilities >= threshold).astype(int)
+    tn, fp, fn, tp = confusion_matrix(y_true, predictions).ravel()
+    return {
+        "threshold": float(threshold),
+        "precision": float(precision_score(y_true, predictions, zero_division=0)),
+        "recall": float(recall_score(y_true, predictions, zero_division=0)),
+        "f1": float(f1_score(y_true, predictions, zero_division=0)),
+        "false_positives": int(fp),
+        "false_negatives": int(fn),
+        "true_negatives": int(tn),
+        "true_positives": int(tp),
+    }
 
 
 def main():
     if not DATA_PATH.exists():
         raise FileNotFoundError(
-            f"Dataset not found at {DATA_PATH}. Download creditcard.csv and place it in data/."
+            f"Dataset not found at {DATA_PATH}. "
+            "Download creditcard.csv and place it in data/."
         )
 
     data = pd.read_csv(DATA_PATH)
-    X = data.drop(columns="Class")
-    y = data["Class"]
+    if "Class" not in data.columns:
+        raise ValueError("Expected target column 'Class' was not found.")
+
+    X = data.drop(columns="Class").copy()
+    y = data["Class"].astype(int)
 
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y
     )
 
     scaler = StandardScaler()
-    X_train = X_train.copy()
-    X_test = X_test.copy()
-    X_train[["Time", "Amount"]] = scaler.fit_transform(X_train[["Time", "Amount"]])
-    X_test[["Time", "Amount"]] = scaler.transform(X_test[["Time", "Amount"]])
+    for column in ["Time", "Amount"]:
+        if column in X_train.columns:
+            X_train[column] = scaler.fit_transform(X_train[[column]])
+            X_test[column] = scaler.transform(X_test[[column]])
 
     smote = SMOTE(random_state=42)
     X_resampled, y_resampled = smote.fit_resample(X_train, y_train)
-    print("Class distribution after SMOTE:")
-    print(pd.Series(y_resampled).value_counts())
 
     model = XGBClassifier(
         n_estimators=300,
@@ -60,47 +85,56 @@ def main():
     model.fit(X_resampled, y_resampled)
 
     probabilities = model.predict_proba(X_test)[:, 1]
-    print(f"ROC-AUC: {roc_auc_score(y_test, probabilities):.4f}")
-    print(f"PR-AUC: {average_precision_score(y_test, probabilities):.4f}")
+    roc_auc = roc_auc_score(y_test, probabilities)
+    pr_auc = average_precision_score(y_test, probabilities)
 
-    rows = []
-    for threshold in np.arange(0.10, 0.91, 0.05):
-        predictions = (probabilities >= threshold).astype(int)
-        tn, fp, fn, tp = confusion_matrix(y_test, predictions).ravel()
-        precision = tp / (tp + fp) if tp + fp else 0
-        recall = tp / (tp + fn) if tp + fn else 0
-        rows.append({
-            "Threshold": round(float(threshold), 2),
-            "Precision": precision,
-            "Recall": recall,
-            "False Positives": fp,
-            "False Negatives": fn,
-        })
+    threshold_rows = []
+    for threshold in np.arange(0.10, 0.91, 0.01):
+        threshold_rows.append(
+            evaluate_at_threshold(y_test, probabilities, threshold)
+        )
 
-    results = pd.DataFrame(rows)
-    valid = results[(results["Recall"] >= 0.80) & (results["Precision"] >= 0.50)]
-    threshold = float(valid.iloc[0]["Threshold"]) if not valid.empty else 0.50
-    predictions = (probabilities >= threshold).astype(int)
+    threshold_results = pd.DataFrame(threshold_rows)
+    selected = threshold_results.loc[threshold_results["f1"].idxmax()]
+    selected_threshold = float(selected["threshold"])
+    selected_metrics = evaluate_at_threshold(
+        y_test, probabilities, selected_threshold
+    )
 
-    print(f"Selected threshold: {threshold:.2f}")
-    print(classification_report(y_test, predictions, zero_division=0))
+    metrics = {
+        "dataset_rows": int(len(data)),
+        "fraud_rows": int(y.sum()),
+        "training_rows_before_smote": int(len(y_train)),
+        "training_rows_after_smote": int(len(y_resampled)),
+        "roc_auc": float(roc_auc),
+        "pr_auc": float(pr_auc),
+        "selected_threshold_metrics": selected_metrics,
+        "classification_report": classification_report(
+            y_test,
+            (probabilities >= selected_threshold).astype(int),
+            output_dict=True,
+            zero_division=0,
+        ),
+    }
 
-    cm = confusion_matrix(y_test, predictions)
-    sns.heatmap(cm, annot=True, fmt="d", cmap="Reds")
-    plt.title("Fraud Detection Confusion Matrix")
-    plt.xlabel("Predicted")
-    plt.ylabel("Actual")
-    plt.tight_layout()
-    plt.show()
+    joblib.dump(model, MODELS_DIR / "xgboost_fraud_model.joblib")
+    joblib.dump(scaler, MODELS_DIR / "fraud_scaler.joblib")
+    threshold_results.to_csv(RESULTS_DIR / "threshold_results.csv", index=False)
 
     importance = pd.DataFrame({
-        "Feature": X.columns,
-        "Importance": model.feature_importances_,
-    }).sort_values("Importance", ascending=False)
-    print("Top feature importance scores:")
-    print(importance.head(15))
-    importance.to_csv("feature_importance.csv", index=False)
-    results.to_csv("threshold_results.csv", index=False)
+        "feature": X.columns,
+        "importance": model.feature_importances_,
+    }).sort_values("importance", ascending=False)
+    importance.to_csv(RESULTS_DIR / "feature_importance.csv", index=False)
+
+    with open(RESULTS_DIR / "metrics.json", "w", encoding="utf-8") as file:
+        json.dump(metrics, file, indent=4)
+
+    print(f"ROC-AUC: {roc_auc:.4f}")
+    print(f"PR-AUC: {pr_auc:.4f}")
+    print(f"Selected threshold: {selected_threshold:.2f}")
+    print(json.dumps(selected_metrics, indent=4))
+    print("Training completed. Results and models were saved.")
 
 
 if __name__ == "__main__":
