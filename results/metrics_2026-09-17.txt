@@ -1,0 +1,11 @@
+Credit Card Fraud Detection - Latest Results
+
+Model: XGBoost Classifier
+Dataset: Kaggle Credit Card Fraud Detection
+Selected threshold: 0.95
+
+Precision: 0.9726 (97.26%)
+Recall: 0.7474 (74.74%)
+F1-score: 0.8452 (84.52%)
+
+The threshold was selected using threshold analysis to maximize F1-score.
