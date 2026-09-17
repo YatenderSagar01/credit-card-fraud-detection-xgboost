@@ -1,0 +1,7 @@
+Metric,Value
+Selected Threshold,0.95
+Precision,0.9726
+Recall,0.7474
+F1-Score,0.8452
+Model,XGBoost Classifier
+Dataset,Kaggle Credit Card Fraud Detection
